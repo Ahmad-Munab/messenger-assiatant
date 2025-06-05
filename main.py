@@ -13,9 +13,6 @@ app = Flask(__name__)
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
-print("VERIFY_TOKEN:", VERIFY_TOKEN)
-print("PAGE_ACCESS_TOKEN:", PAGE_ACCESS_TOKEN)
-print("GROQ_API_KEY:", GROQ_API_KEY)
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
@@ -99,4 +96,6 @@ def send_message(recipient_id, text):
     requests.post(url, params=params, json=payload)
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
+
