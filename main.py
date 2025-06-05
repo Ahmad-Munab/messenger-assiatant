@@ -1,20 +1,83 @@
 import os
-import requests
 from flask import Flask, request
-from groq import Groq
-from urllib.parse import quote
-from bs4 import BeautifulSoup
-from dotenv import load_dotenv
+import requests
 
-load_dotenv()
+from memory import get_chat_history, update_chat_memory
+from web import web_search_tool
+from utils import parse_tool_calls
+from llm import query_llm
+
+from config import VERIFY_TOKEN, PAGE_ACCESS_TOKEN
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
-PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
+system_prompt = """You are a helpful AI assistant with access to web search. Made by Ahmad Munab.
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+If you need current information, recent news, or specific facts you don't know, use the web search tool by wrapping your search query in <web_search>your query here</web_search> tags.
+
+Examples:
+- User asks about recent news: <web_search>latest news today</web_search>
+- User asks about specific facts: <web_search>population of Bangladesh 2024</web_search>
+- User asks about current weather: <web_search>weather forecast today</web_search>
+
+Only use web search when you genuinely need current or specific information. For general questions, respond normally without tools.
+Or say you don't know something. Do not say You are not aware of something, try finding answer through the web search tool.
+
+Be concise and helpful in your responses."""
+
+
+def process_message(sender_id, user_message):
+    chat_history = get_chat_history(sender_id)
+    
+    # First AI call - with tool access
+
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    for msg in chat_history[-10:]:  # Only last 10 messages to avoid token limit
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    messages.append({"role": "user", "content": user_message})
+    
+    try:   
+        first_response = query_llm(messages)
+        tool_calls = parse_tool_calls(first_response)
+
+        if tool_calls:
+            tool_results = []
+            for tool_call in tool_calls:
+                if tool_call["tool"] == "web_search":
+                    print(f"Tool call detected: {tool_call['query']}")
+                    send_message(sender_id, f"🔍 Searching the web...")
+                    search_result = web_search_tool(tool_call["query"])
+                    tool_results.append(f"Web search results for '{tool_call['query']}':\n{search_result}")
+            
+            # Second AI call - with tool results, no tool access
+            final_system_prompt = """You are a helpful AI assistant. Based on the web search results provided, give a comprehensive and helpful response to the user's question. 
+
+Do not mention that you used web search tools. Just provide a natural, helpful response based on the information available."""
+
+            final_messages = [{"role": "system", "content": final_system_prompt}]
+            
+            for msg in chat_history[-8:]:  # Fewer messages to save tokens
+                final_messages.append({"role": msg["role"], "content": msg["content"]})
+            
+            final_messages.append({"role": "user", "content": user_message})
+            
+            if tool_results:
+                tool_context = "\n\n".join(tool_results)
+                final_messages.append({"role": "system", "content": f"Search results:\n{tool_context}"})
+
+            ai_response = query_llm(final_messages)
+        else:
+            ai_response = first_response
+        
+        update_chat_memory(sender_id, "user", user_message)
+        update_chat_memory(sender_id, "assistant", ai_response)
+        
+        return ai_response
+        
+    except Exception as e:
+        return f"Sorry, I encountered an error: {str(e)}"
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -31,71 +94,19 @@ def webhook():
                     sender_id = msg['sender']['id']
                     if 'message' in msg and 'text' in msg['message']:
                         text = msg['message']['text'].strip()
-                        handle_command(sender_id, text)
+                        response = process_message(sender_id, text)
+                        send_message(sender_id, response)
         return "ok", 200
-
-def handle_command(sender_id, text):
-    if text.lower().startswith("ai "):
-        prompt = text[3:].strip()
-        reply = ask_ai(prompt)
-        send_message(sender_id, reply)
-    elif text.lower().startswith("web "):
-        query = text[4:].strip()
-        reply = do_web_search(query)
-        send_message(sender_id, reply)
-    else:
-        send_message(sender_id, "Unrecognized command. Use:\nai <your question>\nweb <your search>")
-
-def ask_ai(prompt):
-    try:
-        chat_completion = groq_client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
-            tools=None,
-            tool_choice="none",
-            temperature=0.33,
-            max_tokens=1024,
-            top_p=1,
-            stop=None,
-        )
-        return chat_completion.choices[0].message.content.strip()
-    except Exception as e:
-        return f"AI error: {str(e)}"
-
-def do_web_search(query):
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
-        search_url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
-        res = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        results = soup.select(".result__snippet")
-
-        if not results:
-            return "No results found."
-
-        lines = [f"🔍 **{query}**"]
-        for result in results[:3]:
-            snippet = result.get_text(strip=True)
-            if snippet:
-                lines.append(f"- {snippet}")
-
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Web error: {str(e)}"
 
 def send_message(recipient_id, text):
     url = 'https://graph.facebook.com/v18.0/me/messages'
     params = {'access_token': PAGE_ACCESS_TOKEN}
-    print("Sending message to:", recipient_id, "Text:", text)
     payload = {
         'recipient': {'id': recipient_id},
-        'message': {'text': text[:2000]} 
+        'message': {'text': text[:2000]}
     }
     requests.post(url, params=params, json=payload)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
-

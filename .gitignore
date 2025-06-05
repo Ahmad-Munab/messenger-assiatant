@@ -1,1 +1,4 @@
 .env
+__pycache__
+chat_memory.json
+info.txt
