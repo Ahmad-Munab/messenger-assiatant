@@ -91,3 +91,18 @@ def get_chat_history(sender_id: str) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"Error getting chat history: {str(e)}")
         return []
+    
+def clear_chat_memory(sender_id: str) -> None:
+    """
+    Clear chat memory for a specific sender
+    
+    :param sender_id: The unique identifier for the sender
+    """
+    try:
+        memory = load_memory()
+        if sender_id in memory:
+            print(f"Clearing chat memory for {sender_id}")
+            del memory[sender_id]
+            save_memory(memory)
+    except Exception as e:
+        print(f"Error clearing chat memory: {str(e)}")

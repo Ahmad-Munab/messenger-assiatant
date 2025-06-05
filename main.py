@@ -3,7 +3,7 @@ from flask import Flask, request
 import requests
 from typing import List, Dict, Optional
 
-from memory import get_chat_history, update_chat_memory
+from memory import get_chat_history, update_chat_memory, clear_chat_memory
 from web import web_search_tool
 from browser import browse_website
 from utils import parse_response
@@ -124,6 +124,11 @@ def process_message(sender_id: str, user_message: str) -> None:
     try:
         print(f"Processing message from {sender_id}: {user_message}")
         
+        if user_message == "/reset":
+            clear_chat_memory(sender_id)
+            send_message(sender_id, "Chat memory has been reset.")
+            return
+
         # Get chat history
         chat_history = get_chat_history(sender_id)
         
